@@ -1,0 +1,202 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zaqar-billing-middleware
+  namespace: openstack
+data:
+  billing_middleware.py: |
+    """
+    Zaqar Billing WSGI Middleware
+
+    Wraps the Zaqar WSGI application to emit oslo.messaging notifications
+    for every API request, enabling per-request billing via Ceilometer/Gnocchi.
+
+    This module is loaded by a custom WSGI entry point that wraps
+    Zaqar's init_application().
+    """
+    import logging
+    import time
+    import threading
+
+    LOG = logging.getLogger(__name__)
+
+    _notifier = None
+    _notifier_lock = threading.Lock()
+
+
+    def _get_notifier():
+        """Lazy-init the oslo.messaging notifier (singleton)."""
+        global _notifier
+        if _notifier is not None:
+            return _notifier
+
+        with _notifier_lock:
+            if _notifier is not None:
+                return _notifier
+            try:
+                from oslo_config import cfg
+                import oslo_messaging
+
+                # Always create fresh config from file to avoid conflicts
+                # with zaqar-server's global CONF
+                conf = cfg.ConfigOpts()
+                conf(['--config-file', '/etc/zaqar/zaqar.conf'])
+
+                transport = oslo_messaging.get_notification_transport(conf)
+                _notifier = oslo_messaging.Notifier(
+                    transport,
+                    publisher_id='zaqar.billing',
+                    driver='messagingv2',
+                    topics=['notifications']
+                )
+                LOG.info("BillingMiddleware: Notifier created successfully")
+            except Exception as e:
+                LOG.error("BillingMiddleware: Failed to create notifier: %s", e, exc_info=True)
+        return _notifier
+
+
+    class BillingMiddleware(object):
+        """WSGI middleware that wraps the Zaqar Falcon app."""
+
+        def __init__(self, app):
+            self.app = app
+            LOG.info("BillingMiddleware: Wrapping Zaqar WSGI app")
+
+        def __call__(self, environ, start_response):
+            method = environ.get('REQUEST_METHOD', 'GET')
+            path = environ.get('PATH_INFO', '/')
+            project_id = environ.get('HTTP_X_PROJECT_ID') or environ.get('HTTP_X_TENANT_ID', '')
+            user_id = environ.get('HTTP_X_USER_ID', '')
+
+            response_status = [None]
+            start_time = time.time()
+
+            def custom_start_response(status, headers, exc_info=None):
+                response_status[0] = status
+                return start_response(status, headers, exc_info)
+
+            response = self.app(environ, custom_start_response)
+
+            # Emit notification after start_response has been called
+            try:
+                duration = time.time() - start_time
+                status_code = 0
+                if response_status[0]:
+                    try:
+                        status_code = int(response_status[0].split(' ')[0])
+                    except (ValueError, IndexError):
+                        pass
+
+                notifier = _get_notifier()
+                if notifier is not None:
+                    resource_type = 'unknown'
+                    if '/queues' in path:
+                        resource_type = 'queue'
+                    if '/messages' in path:
+                        resource_type = 'message'
+                    if '/claims' in path:
+                        resource_type = 'claim'
+                    if '/subscriptions' in path:
+                        resource_type = 'subscription'
+
+                    payload = {
+                        'project_id': project_id,
+                        'user_id': user_id,
+                        'method': method,
+                        'path': path,
+                        'status_code': status_code,
+                        'duration': round(duration, 4),
+                        'action': method.lower(),
+                        'resource_type': resource_type,
+                    }
+
+                    notifier.info(
+                        {},
+                        'zaqar.billing.request',
+                        payload
+                    )
+            except Exception as e:
+                LOG.error("BillingMiddleware: notification error: %s", e, exc_info=True)
+
+            return response
+
+
+    def wrap_app(app):
+        """Wrap a WSGI app with billing middleware."""
+        return BillingMiddleware(app)
+
+
+    def init_application():
+        """Custom entry point that wraps Zaqar with billing middleware."""
+        import sys
+        sys.path.insert(0, '/etc/zaqar')
+        from zaqar.transport.wsgi.app import init_application as zaqar_init
+        app = zaqar_init()
+        return BillingMiddleware(app)
+  usercustomize.py: |
+    """
+    Auto-patches Zaqar's init_application to wrap with billing middleware.
+    This file is loaded automatically by Python on startup when placed in site-packages.
+    """
+    import importlib
+    import sys
+
+    _original_init = None
+
+    def _patched_init():
+        global _original_init
+        if _original_init is None:
+            from zaqar.transport.wsgi import app as zaqar_app
+            _original_init = zaqar_app._real_init_application
+        app = _original_init()
+        sys.path.insert(0, '/etc/zaqar')
+        from billing_middleware import BillingMiddleware
+        return BillingMiddleware(app)
+
+    def _patch():
+        try:
+            from zaqar.transport.wsgi import app as zaqar_app
+            if hasattr(zaqar_app, 'init_application'):
+                zaqar_app._real_init_application = zaqar_app.init_application
+                zaqar_app.init_application = _patched_init
+        except ImportError:
+            pass
+
+    _patch()
+  billing_patch.py: |
+    """
+    Monkey-patch for Zaqar's WSGI transport driver.
+    
+    This module patches zaqar.transport.wsgi.driver.Driver._init_middleware
+    to wrap the final WSGI app with our BillingMiddleware.
+    
+    It should be imported before zaqar-server starts via PYTHONPATH or
+    executed via: python3 -c "import billing_patch" before starting zaqar.
+    
+    The simplest way to activate: add to the startup script:
+      export PYTHONSTARTUP=/etc/zaqar/billing_patch.py
+    """
+    import logging
+    LOG = logging.getLogger(__name__)
+
+    try:
+        from zaqar.transport.wsgi import driver as wsgi_driver
+        import sys
+        sys.path.insert(0, '/etc/zaqar')
+        from billing_middleware import BillingMiddleware
+
+        _original_init_middleware = wsgi_driver.Driver._init_middleware
+
+        def _patched_init_middleware(self):
+            """Call original _init_middleware then wrap self.app with billing."""
+            _original_init_middleware(self)
+            self.app = BillingMiddleware(self.app)
+            LOG.info("BillingMiddleware: Successfully wrapped Zaqar WSGI app")
+
+        wsgi_driver.Driver._init_middleware = _patched_init_middleware
+        LOG.info("BillingMiddleware: Patched Driver._init_middleware")
+    except Exception as e:
+        LOG.warning("BillingMiddleware: Failed to patch: %s", e)
+  zaqar_billing.pth: |
+    import sys; sys.path.insert(0, '/etc/zaqar'); import billing_patch

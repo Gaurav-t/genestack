@@ -137,6 +137,7 @@ set_args=(
     --set "endpoints.oslo_cache.auth.memcache_secret_key=$(kubectl --namespace openstack get secret os-memcached -o jsonpath='{.data.memcache_secret_key}' | base64 -d)"
     --set "conf.zaqar.keystone_authtoken.memcache_secret_key=$(kubectl --namespace openstack get secret os-memcached -o jsonpath='{.data.memcache_secret_key}' | base64 -d)"
     --set "conf.zaqar.signed_url.secret_key=$(kubectl --namespace openstack get secret zaqar-signed-url-secret-key -o jsonpath='{.data.zaqar_signed_url_secret_key}' | base64 -d)"
+    --set "conf.zaqar.DEFAULT.transport_url=rabbit://zaqar:$(kubectl --namespace openstack get secret zaqar-rabbitmq-password -o jsonpath='{.data.password}' | base64 -d)@rabbitmq.openstack.svc.cluster.local:5672/zaqar"
 )
 
 

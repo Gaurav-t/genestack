@@ -1,0 +1,33 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: zaqar-audit-map
+  namespace: openstack
+data:
+  api_audit_map.conf: |
+    [DEFAULT]
+    target_endpoint_type = messaging
+
+    [path_keywords]
+    queues = queue_name
+    messages = message_id
+    claims = claim_id
+    subscriptions = subscription_id
+
+    [service_endpoints]
+    messaging = service/messaging
+
+    [custom_actions]
+    messages/POST = create/messaging/message
+    messages/GET = read/messaging/message
+    messages/DELETE = delete/messaging/message
+    claims/POST = create/messaging/claim
+    claims/PATCH = update/messaging/claim
+    claims/DELETE = delete/messaging/claim
+    queues/PUT = create/messaging/queue
+    queues/PATCH = update/messaging/queue
+    queues/DELETE = delete/messaging/queue
+    subscriptions/POST = create/messaging/subscription
+    subscriptions/GET = read/messaging/subscription
+    subscriptions/DELETE = delete/messaging/subscription

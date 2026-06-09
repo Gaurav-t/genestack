@@ -139,6 +139,16 @@ conf:
     drivers:transport:wsgi:
       bind: 0.0.0.0
       port: 8888
+    oslo_messaging_notifications:
+      driver: messagingv2
+      topics:
+        - notifications
+    oslo_middleware:
+      enable_proxy_headers_parsing: true
+    audit_middleware_notifications:
+      driver: messagingv2
+      topics:
+        - notifications
     oslo_messaging_rabbit:
       amqp_durable_queues: false
       rabbit_ha_queues: false
@@ -155,6 +165,33 @@ conf:
         handlers:
           - stdout
         level: INFO
+  api_paste:
+    "composite:messaging":
+      use: "egg:Paste#urlmap"
+      "/": zaqarversions
+      "/v1": zaqarapi_v1
+    "composite:zaqarapi_v1":
+      use: "call:zaqar.transport.wsgi:pipeline_factory"
+      noauth: "request_id faultwrap sizelimit noauth zaqarapi_v1"
+      keystone: "request_id faultwrap sizelimit authtoken keystonecontext billing zaqarapi_v1"
+    "app:zaqarversions":
+      paste.app_factory: "zaqar.api.versions:Versions.factory"
+    "app:zaqarapi_v1":
+      paste.app_factory: "zaqar.api.v1.app:make_app"
+    "filter:request_id":
+      paste.filter_factory: "oslo_middleware:RequestId.factory"
+    "filter:faultwrap":
+      paste.filter_factory: "zaqar.api.middleware:FaultWrapper.factory"
+    "filter:noauth":
+      paste.filter_factory: "zaqar.api.middleware:NoAuthMiddleware.factory"
+    "filter:sizelimit":
+      paste.filter_factory: "oslo_middleware:RequestBodySizeLimiter.factory"
+    "filter:authtoken":
+      paste.filter_factory: "keystonemiddleware.auth_token:filter_factory"
+    "filter:keystonecontext":
+      paste.filter_factory: "zaqar.api.middleware:KeystoneContextMiddleware.factory"
+    "filter:billing":
+      paste.filter_factory: "billing_middleware:filter_factory"
 
 manifests:
   certificates: false

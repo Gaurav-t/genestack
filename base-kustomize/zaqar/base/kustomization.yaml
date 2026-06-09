@@ -6,4 +6,12 @@ resources:
   - zaqar-rabbitmq-queue.yaml
   - hpa-zaqar-api.yaml
   - policies.yaml
+  - zaqar-audit-map.yaml
+  - zaqar-billing-middleware.yaml
   - all.yaml
+
+patches:
+  - path: patch-audit-map-volume.yaml
+    target:
+      kind: Deployment
+      name: zaqar-api

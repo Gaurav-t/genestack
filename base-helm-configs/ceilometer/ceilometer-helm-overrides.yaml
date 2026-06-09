@@ -85,6 +85,7 @@ conf:
           - rabbit://rabbitmq:password@rabbitmq.openstack.svc.cluster.local:5672/heat
           - rabbit://rabbitmq:password@rabbitmq.openstack.svc.cluster.local:5672/swift
           - rabbit://rabbitmq:password@rabbitmq.openstack.svc.cluster.local:5672/blazar
+          - rabbit://rabbitmq:password@rabbitmq.openstack.svc.cluster.local:5672/zaqar
     oslo_messaging_notifications:
       driver: messagingv2
       topics:
@@ -782,6 +783,76 @@ conf:
         audit_period_ending:
           type: datetime
           fields: payload.audit_period_ending
+    # Zaqar messaging events
+    - event_type:
+        - "zaqar.queue.create"
+        - "zaqar.queue.delete"
+        - "zaqar.queue.update"
+      traits: &zaqar_queue_traits
+        project_id:
+          fields: payload.project_id
+        user_id:
+          fields: payload.user_id
+        queue_name:
+          fields: payload.queue_name
+        resource_id:
+          fields: payload.queue_name
+    - event_type:
+        - "zaqar.message.post"
+        - "zaqar.message.claim"
+        - "zaqar.message.delete"
+      traits: &zaqar_message_traits
+        project_id:
+          fields: payload.project_id
+        user_id:
+          fields: payload.user_id
+        queue_name:
+          fields: payload.queue_name
+        resource_id:
+          fields: payload.queue_name
+        message_count:
+          type: int
+          fields: payload.message_count
+        total_size:
+          type: int
+          fields: payload.total_size
+    - event_type:
+        - "zaqar.subscription.create"
+        - "zaqar.subscription.delete"
+        - "zaqar.subscription.update"
+      traits: &zaqar_subscription_traits
+        project_id:
+          fields: payload.project_id
+        user_id:
+          fields: payload.user_id
+        queue_name:
+          fields: payload.queue_name
+        subscription_id:
+          fields: payload.subscription_id
+        resource_id:
+          fields: payload.subscription_id
+    # Zaqar CADF audit events (per-request tracking)
+    # Zaqar billing middleware events (per-request tracking)
+    - event_type: "zaqar.billing.request"
+      traits: &zaqar_billing_traits
+        project_id:
+          fields: payload.project_id
+        user_id:
+          fields: payload.user_id
+        method:
+          fields: payload.method
+        path:
+          fields: payload.path
+        status_code:
+          type: int
+          fields: payload.status_code
+        response_size:
+          type: int
+          fields: payload.response_size
+        duration:
+          fields: payload.duration
+        resource_type:
+          fields: payload.resource_type
     - event_type: profiler.*
       traits:
         project:
@@ -1145,6 +1216,29 @@ conf:
           start_date: start_date
           end_date: end_date
           status: status
+
+      - resource_type: messaging_queue
+        metrics:
+          - "zaqar.queue.create"
+          - "zaqar.queue.delete"
+          - "zaqar.message.post"
+          - "zaqar.message.size"
+          - "zaqar.message.claim"
+          - "zaqar.message.delete"
+          - "zaqar.subscription.create"
+          - "zaqar.subscription.delete"
+          - "zaqar.api.request"
+          - "zaqar.api.response.size"
+        attributes:
+          queue_name: resource_metadata.queue_name
+        event_create:
+          - zaqar.queue.create
+        event_delete:
+          - zaqar.queue.delete
+        event_attributes:
+          id: resource_id
+          project_id: project_id
+          user_id: user_id
 
       - resource_type: identity
         metrics:
@@ -1733,6 +1827,140 @@ conf:
           start_date: $.payload.start_date
           end_date: $.payload.end_date
 
+      # Zaqar Messaging Metrics
+      - name: "zaqar.queue.create"
+        event_type:
+          - "zaqar.queue.create"
+        type: "delta"
+        unit: "queue"
+        volume: 1
+        resource_id: $.payload.queue_name
+        project_id: $.payload.project_id
+        user_id: $.payload.user_id
+        metadata:
+          queue_name: $.payload.queue_name
+
+      - name: "zaqar.queue.delete"
+        event_type:
+          - "zaqar.queue.delete"
+        type: "delta"
+        unit: "queue"
+        volume: 1
+        resource_id: $.payload.queue_name
+        project_id: $.payload.project_id
+        user_id: $.payload.user_id
+        metadata:
+          queue_name: $.payload.queue_name
+
+      - name: "zaqar.message.post"
+        event_type:
+          - "zaqar.message.post"
+        type: "delta"
+        unit: "message"
+        volume: $.payload.message_count
+        resource_id: $.payload.queue_name
+        project_id: $.payload.project_id
+        user_id: $.payload.user_id
+        metadata:
+          queue_name: $.payload.queue_name
+          total_size: $.payload.total_size
+
+      - name: "zaqar.message.size"
+        event_type:
+          - "zaqar.message.post"
+        type: "delta"
+        unit: "B"
+        volume: $.payload.total_size
+        resource_id: $.payload.queue_name
+        project_id: $.payload.project_id
+        user_id: $.payload.user_id
+        metadata:
+          queue_name: $.payload.queue_name
+          message_count: $.payload.message_count
+
+      - name: "zaqar.message.claim"
+        event_type:
+          - "zaqar.message.claim"
+        type: "delta"
+        unit: "message"
+        volume: $.payload.message_count
+        resource_id: $.payload.queue_name
+        project_id: $.payload.project_id
+        user_id: $.payload.user_id
+        metadata:
+          queue_name: $.payload.queue_name
+          claim_id: $.payload.claim_id
+
+      - name: "zaqar.message.delete"
+        event_type:
+          - "zaqar.message.delete"
+        type: "delta"
+        unit: "message"
+        volume: $.payload.message_count
+        resource_id: $.payload.queue_name
+        project_id: $.payload.project_id
+        user_id: $.payload.user_id
+        metadata:
+          queue_name: $.payload.queue_name
+
+      - name: "zaqar.subscription.create"
+        event_type:
+          - "zaqar.subscription.create"
+        type: "delta"
+        unit: "subscription"
+        volume: 1
+        resource_id: $.payload.subscription_id
+        project_id: $.payload.project_id
+        user_id: $.payload.user_id
+        metadata:
+          queue_name: $.payload.queue_name
+          subscription_id: $.payload.subscription_id
+
+      - name: "zaqar.subscription.delete"
+        event_type:
+          - "zaqar.subscription.delete"
+        type: "delta"
+        unit: "subscription"
+        volume: 1
+        resource_id: $.payload.subscription_id
+        project_id: $.payload.project_id
+        user_id: $.payload.user_id
+        metadata:
+          queue_name: $.payload.queue_name
+          subscription_id: $.payload.subscription_id
+
+      # Zaqar per-request API metrics (custom billing middleware)
+      - name: "zaqar.api.request"
+        event_type:
+          - "zaqar.billing.request"
+        type: "delta"
+        unit: "request"
+        volume: 1
+        resource_id: $.payload.path
+        project_id: $.payload.project_id
+        user_id: $.payload.user_id
+        metadata:
+          method: $.payload.method
+          path: $.payload.path
+          status_code: $.payload.status_code
+          resource_type: $.payload.resource_type
+          duration: $.payload.duration
+          response_size: $.payload.response_size
+
+      - name: "zaqar.api.response.size"
+        event_type:
+          - "zaqar.billing.request"
+        type: "delta"
+        unit: "B"
+        volume: $.payload.response_size
+        resource_id: $.payload.path
+        project_id: $.payload.project_id
+        user_id: $.payload.user_id
+        metadata:
+          method: $.payload.method
+          path: $.payload.path
+          status_code: $.payload.status_code
+
       # Image
       - name: "image.size"
         event_type:
@@ -2197,6 +2425,33 @@ conf:
         interval: 300
         meters:
           - "*"
+      - name: zaqar_pollster
+        interval: 300
+        meters:
+          - "zaqar.queue.count"
+          - "zaqar.queue.message_count"
+  dynamic_pollsters:
+    - name: "zaqar.queue.count"
+      sample_type: "gauge"
+      unit: "queue"
+      value_attribute: "[?].length(@)"
+      endpoint_type: "messaging"
+      url_path: "/v2/queues"
+      response_entries_key: "queues"
+      project_id_attribute: "metadata.project_id"
+      metadata_fields:
+        - "name"
+    - name: "zaqar.queue.message_count"
+      sample_type: "gauge"
+      unit: "message"
+      value_attribute: "metadata.message_count"
+      endpoint_type: "messaging"
+      url_path: "/v2/queues"
+      response_entries_key: "queues"
+      project_id_attribute: "metadata.project_id"
+      resource_id_attribute: "name"
+      metadata_fields:
+        - "name"
   pipeline:
     sources:
       - name: meter_source

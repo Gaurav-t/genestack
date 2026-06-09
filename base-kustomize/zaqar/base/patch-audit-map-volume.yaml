@@ -1,0 +1,40 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zaqar-api
+  namespace: openstack
+spec:
+  template:
+    spec:
+      containers:
+        - name: zaqar-api
+          env:
+            - name: PYTHONPATH
+              value: "/etc/zaqar"
+            - name: ENABLE_BILLING_MIDDLEWARE
+              value: "true"
+          volumeMounts:
+            - name: zaqar-audit-map
+              mountPath: /etc/zaqar/api_audit_map.conf
+              subPath: api_audit_map.conf
+              readOnly: true
+            - name: zaqar-billing-middleware
+              mountPath: /etc/zaqar/billing_middleware.py
+              subPath: billing_middleware.py
+              readOnly: true
+            - name: zaqar-billing-middleware
+              mountPath: /etc/zaqar/billing_patch.py
+              subPath: billing_patch.py
+              readOnly: true
+            - name: zaqar-billing-middleware
+              mountPath: /var/lib/openstack/lib/python3.12/site-packages/zaqar_billing.pth
+              subPath: zaqar_billing.pth
+              readOnly: true
+      volumes:
+        - name: zaqar-audit-map
+          configMap:
+            name: zaqar-audit-map
+        - name: zaqar-billing-middleware
+          configMap:
+            name: zaqar-billing-middleware
