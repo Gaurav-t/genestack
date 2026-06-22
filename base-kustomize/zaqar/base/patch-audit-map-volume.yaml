@@ -1,0 +1,20 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: zaqar-api
+  namespace: openstack
+spec:
+  template:
+    spec:
+      containers:
+        - name: zaqar-api
+          volumeMounts:
+            - name: zaqar-audit-map
+              mountPath: /etc/zaqar/api_audit_map.conf
+              subPath: api_audit_map.conf
+              readOnly: true
+      volumes:
+        - name: zaqar-audit-map
+          configMap:
+            name: zaqar-audit-map
